@@ -34,8 +34,7 @@ class ffmpegThread:
         self.bitrate2 = "0"
         self.now_resolution1 = "0"
         self.now_bitrate1 = "0"
-        self.now_resolution2 = "0"
-        self.now_bitrate2 = "0"
+        self.startFFmpeg2Flag = False
 
 
         self.crc16_modbus = crcmod.mkCrcFun(0x18005, initCrc=0xFFFF, rev=True, xorOut=0x0000)
@@ -113,6 +112,7 @@ class ffmpegThread:
                                 }
                                 self.bitrate2 = rate_map.get(rate_data, '0')
                                 self.resolution2 = resolution_map.get(rate_data, '0')
+                                self.startFFmpeg2Flag = True
                                 print(self.bitrate2, self.resolution2)
                         if result['addr'] == 0x10 and result['cmd'] == 0x05:
                             os.system("poweroff")
@@ -189,17 +189,17 @@ class ffmpegThread:
                 else:
                     ffmpeg_command = f"ffmpeg -hwaccel rkmpp -rtsp_transport tcp -i {self.input_url} -c:v libx264 -x264-params keyint=50:scenecut=0:repeat-headers=1 -preset ultrafast -tune zerolatency -b:v {self.bitrate1} -s {self.resolution1} -r 30 -f h264 -"
                 print(ffmpeg_command)
+                self.now_bitrate1 = self.bitrate1
+                self.now_resolution1 = self.resolution1
                 self.ffmpeg_process1 = subprocess.Popen(ffmpeg_command, 
                                                         shell=True, 
                                                         stdout=subprocess.PIPE, 
                                                         stderr=subprocess.DEVNULL)
-                self.now_bitrate1 = self.bitrate1
-                self.now_resolution1 = self.resolution1
             time.sleep(1)
 
     def manageFFmpegProcess2(self):
         while True:
-            if (self.bitrate2 != self.now_bitrate2 or self.resolution2 != self.now_resolution2):
+            if (self.startFFmpeg2Flag == True):
                 # 如果进程正在运行，先kill
                 if self.ffmpeg_process2 and self.ffmpeg_process2.poll() is None:
                     self.kill_process(self.ffmpeg_process2)
@@ -209,20 +209,19 @@ class ffmpegThread:
                     scale_command = f"-vf scale_rkrga=w={self.resolution2.split('x')[0]}:h={self.resolution2.split('x')[1]}:format=nv12:afbc=1"
                     ffmpeg_command = f"ffmpeg -hwaccel rkmpp -hwaccel_output_format drm_prime -afbc rga -rtsp_transport tcp -i {self.input_url} -c:a copy -strict -2 {scale_command} -c:v h264_rkmpp -rc_mode CBR -b:v {self.bitrate2} -maxrate {self.bitrate2} -bufsize {bufsize} -profile:v high -g:v 50 -f h264 -"
                 else:
-                    ffmpeg_command = f"ffmpeg -hwaccel rkmpp -rtsp_transport tcp -i {self.input_url} -c:v libx264 -x264-params keyint=50:scenecut=0:repeat-headers=1 -preset ultrafast -tune zerolatency -b:v {self.bitrate2} -s {self.resolution2} -r 30 -f h264 -"
+                    ffmpeg_command = f"/home/orangepi/x265_ffmpeg/ffmpeg/bin/ffmpeg -rtsp_transport tcp -i {self.input_url} -c:v libx264 -x264-params keyint=50:scenecut=0:repeat-headers=1:intra-refresh=1 -preset ultrafast -tune zerolatency -b:v {self.bitrate2} -s {self.resolution2} -t 10 -r 30 -f h264 -"
                 print(ffmpeg_command)
+                self.startFFmpeg2Flag = False
                 self.ffmpeg_process2 = subprocess.Popen(ffmpeg_command, 
                                                         shell=True, 
                                                         stdout=subprocess.PIPE, 
-                                                        stderr=subprocess.DEVNULL)
-                self.now_bitrate2 = self.bitrate2
-                self.now_resolution2 = self.resolution2
+                                                        stderr=subprocess.DEVNULL)   
             time.sleep(1)
 
     def pushH264ToUDP1(self):
-        client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        print(f"UDP client sending to {UDP_HOST1}:{UDP_VEDIO_PORT1}")
         while True:
+            client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            print(f"UDP client sending to {UDP_HOST2}:{UDP_VEDIO_PORT2}")
             try:
                 while True:
                     if self.ffmpeg_process1 and self.ffmpeg_process1.stdout:
@@ -243,13 +242,13 @@ class ffmpegThread:
                     self.now_resolution1 = "0"
 
     def pushH264ToUDP2(self):
-        client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        print(f"UDP client sending to {UDP_HOST2}:{UDP_VEDIO_PORT2}")
         while True:
+            client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            print(f"UDP client sending to {UDP_HOST2}:{UDP_VEDIO_PORT2}")
             try:
                 while True:
                     if self.ffmpeg_process2 and self.ffmpeg_process2.stdout:
-                        data = self.ffmpeg_process2.stdout.read(4)
+                        data = self.ffmpeg_process2.stdout.read(1)
                         if not data:
                             break
                         client.sendto(data, (UDP_HOST2, UDP_VEDIO_PORT2))
@@ -262,8 +261,6 @@ class ffmpegThread:
                 if self.ffmpeg_process2:
                     self.kill_process(self.ffmpeg_process2)
                     self.ffmpeg_process2 = None
-                    self.now_bitrate2 = "0"
-                    self.now_resolution2 = "0"
 
     def start(self):
         threading.Thread(target=self.receiveUDPCommandFrom1, daemon=True).start()
