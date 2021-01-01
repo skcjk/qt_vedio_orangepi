@@ -15,7 +15,7 @@ os.system("systemctl stop serial-getty@ttyS2.service")
 crc16_ccitt = crcmod.mkCrcFun(0x11021, initCrc=0, rev=True, xorOut=0x0000)
 
 # 配置参数
-SERIAL_PORT = '/dev/ttyS2'
+SERIAL_PORT = '/dev/ttyS4'
 BAUD_RATE = 38400
 
 # 初始化串口
@@ -121,9 +121,16 @@ try:
                         continue
                     # 速率数据解析
                     rate_map = {0x01: '8M', 0x02: '4M', 0x03: '2M', 0x04: '1M'}
+                    rate_resolution_map = {
+                        '8M': '1920x1080',
+                        '4M': '1920x1080',
+                        '2M': '1920x1080',
+                        '1M': '1920x1080'
+                    }
                     rate_str = rate_map.get(rate_data, '未知')
-                    print(f"收到有效帧: 设备地址={dev_addr:02X}, 命令类型={cmd_type:02X}, 帧长度={frame_len}, 速率={rate_str}, CRC={crc_recv.hex().upper()}")
-                    start_ffmpeg_process(rate_str, "1920x1080")
+                    resolution = rate_resolution_map.get(rate_str, '1920x1080')
+                    # print(f"收到有效帧: 设备地址={dev_addr:02X}, 命令类型={cmd_type:02X}, 帧长度={frame_len}, 速率={rate_str}, 分辨率={resolution}, CRC={crc_recv.hex().upper()}")
+                    start_ffmpeg_process(rate_str, resolution)
                     buffer = buffer[10:]
         except Exception as e:
             print("error", e)
