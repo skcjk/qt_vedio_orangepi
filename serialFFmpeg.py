@@ -8,6 +8,9 @@ import socket
 import crcmod
 import threading
 import psutil 
+import datetime
+import random
+import string
 
 # 配置参数
 SERIAL_PORT = '/dev/ttyS4'
@@ -22,6 +25,29 @@ HEADER = b'\x48\x59\x43\x4C'  # 0x4859434C
 
 # 同步系统时间
 os.system("hwclock -s")
+
+def start_recording():
+
+    # rtsp_url = f"rtsp://admin:abcd1234@192.168.137.123:554"
+    rtsp_url = f"rtsp://localhost:8554/mystream"
+    
+    now = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    random_str = ''.join(random.choices(string.ascii_letters + string.digits, k=8))
+    output_file = f"/home/orangepi/data_test/output_{now}_{random_str}_piece%d.mp4"
+    
+    ffmpeg_command = [
+        "ffmpeg",
+        "-y",  # 强制覆盖输出文件
+        "-i", rtsp_url,
+        "-c:v", "copy",
+        "-f", "segment",
+        "-segment_time", "300s", 
+        "-reset_timestamps", "1",
+        output_file
+    ]
+    print(ffmpeg_command)
+
+    subprocess.Popen(ffmpeg_command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 class ffmpegThread:
     def __init__(self):
@@ -270,6 +296,7 @@ class ffmpegThread:
         threading.Thread(target=self.manageFFmpegProcess2, daemon=True).start()
         threading.Thread(target=self.pushH264ToUDP1, daemon=True).start()
         threading.Thread(target=self.pushH264ToUDP2, daemon=True).start()
+        threading.Thread(target=start_recording, daemon=True).start()
         while True:
             time.sleep(10)
 
