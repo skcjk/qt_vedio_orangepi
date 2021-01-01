@@ -10,12 +10,11 @@ import socket
 import crcmod
 import threading
 
-TCP_HOST = '192.168.1.15'
-TCP_PORT = 9000
+UDP_HOST = '192.168.1.1'
+UDP_PORT = 10002
 
 # 同步系统时间
 os.system("hwclock -s")
-os.system("systemctl stop serial-getty@ttyS2.service")
 
 crc16_modbus = crcmod.mkCrcFun(0x18005, initCrc=0xFFFF, rev=True, xorOut=0x0000)
 
@@ -55,14 +54,15 @@ def start_ffmpeg_process(bitrate, resolution="1920x1080"):
     else:
         print("ffmpeg is not running, starting a new process")
     # 构建ffmpeg命令
-    input_url = f"rtsp://admin:abcd1234@192.168.1.123:554"
+    # input_url = f"rtsp://admin:abcd1234@192.168.1.123:554"
+    input_url = f"rtsp://localhost:8554/mystream"
     output_url = f"rtsp://localhost:8554/stream1"
     bufsize = str(int(bitrate[:-1]) * 2) + bitrate[-1]  # 将bufsize设置为bitrate的两倍
     if resolution in ["1920x1080", "1280x720", "320x180"]:
         scale_command = f"-vf scale_rkrga=w={resolution.split('x')[0]}:h={resolution.split('x')[1]}:format=nv12:afbc=1"
         ffmpeg_command = f"ffmpeg -hwaccel rkmpp -hwaccel_output_format drm_prime -afbc rga -rtsp_transport tcp -i {input_url} -c:a copy -strict -2 {scale_command} -c:v h264_rkmpp -rc_mode CBR -b:v {bitrate} -maxrate {bitrate} -bufsize {bufsize} -profile:v high -g:v 50 -f h264 -"
     else:
-        ffmpeg_command = f"ffmpeg -hwaccel rkmpp -rtsp_transport tcp -i {input_url} -c:v libx264 -preset ultrafast -tune zerolatency -b:v {bitrate} -s {resolution} -r 30 -f h264 -"
+        ffmpeg_command = f"ffmpeg -hwaccel rkmpp -rtsp_transport tcp -i {input_url} -c:v libx264 -x264-params keyint=50:scenecut=0:repeat-headers=1 -preset ultrafast -tune zerolatency -b:v {bitrate} -s {resolution} -r 30 -f h264 -"
     try:
         print(ffmpeg_command)
         global process
@@ -91,20 +91,16 @@ def stop_ffmpeg():
     else:
         return
 
-def tcp_send_thread():
-    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server.bind((TCP_HOST, TCP_PORT))
-    server.listen(1)
-    print(f"TCP server listening on {TCP_HOST}:{TCP_PORT}")
+def udp_send_thread():
+    client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    print(f"UDP client sending to {UDP_HOST}:{UDP_PORT}")
     try:
-        conn, addr = server.accept()
-        print(f"Client connected: {addr}")
         while True:
             if 'process' in globals() and process and process.stdout:
-                data = process.stdout.read(1024)
+                data = process.stdout.read(4096)
                 if not data:
                     break
-                conn.sendall(data)
+                client.sendto(data, (UDP_HOST, UDP_PORT))
             else:
                 time.sleep(0.1)
     except Exception as e:
@@ -112,11 +108,12 @@ def tcp_send_thread():
     finally:
         if 'process' in globals() and process:
             process.terminate()
-        server.close()
+        client.close()
 
-# 启动TCP线程
-tcp_thread = threading.Thread(target=tcp_send_thread, daemon=True)
-tcp_thread.start()
+# 启动UDP线程
+udp_thread = threading.Thread(target=udp_send_thread, daemon=True)
+udp_thread.start()
+start_ffmpeg_process('8M', '1920x1080')
 
 try:
     while True:
