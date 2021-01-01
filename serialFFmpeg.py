@@ -120,18 +120,24 @@ try:
                         buffer = buffer[1:]
                         continue
                     # 速率数据解析
-                    rate_map = {0x01: '8M', 0x02: '4M', 0x03: '2M', 0x04: '1M'}
+                    rate_map = {0x01: '8M', 0x02: '4M', 0x03: '2M', 0x04: '1M', 
+                                0x05: '80k', 0x06: '40k', 0x07: '20k', 0x08:'10k'}
                     rate_resolution_map = {
                         '8M': '1920x1080',
                         '4M': '1920x1080',
-                        '2M': '1920x1080',
-                        '1M': '1920x1080'
+                        '2M': '1280x720',
+                        '1M': '1280x720',
+                        '80k': '320x240',
+                        '40k': '320x240',
+                        '20k': '256x128',
+                        '10k': '256x128'
                     }
                     rate_str = rate_map.get(rate_data, '未知')
                     resolution = rate_resolution_map.get(rate_str, '1920x1080')
                     # print(f"收到有效帧: 设备地址={dev_addr:02X}, 命令类型={cmd_type:02X}, 帧长度={frame_len}, 速率={rate_str}, 分辨率={resolution}, CRC={crc_recv.hex().upper()}")
                     start_ffmpeg_process(rate_str, resolution)
                     buffer = buffer[10:]
+                    ser.write(b'\x82')
         except Exception as e:
             print("error", e)
 except Exception as e:
