@@ -6,7 +6,12 @@ import redis
 import time
 import psutil
 import os
+import socket
 import crcmod
+import threading
+
+TCP_HOST = '192.168.1.15'
+TCP_PORT = 9000
 
 # 同步系统时间
 os.system("hwclock -s")
@@ -55,20 +60,20 @@ def start_ffmpeg_process(bitrate, resolution="1920x1080"):
     bufsize = str(int(bitrate[:-1]) * 2) + bitrate[-1]  # 将bufsize设置为bitrate的两倍
     if resolution in ["1920x1080", "1280x720", "320x180"]:
         scale_command = f"-vf scale_rkrga=w={resolution.split('x')[0]}:h={resolution.split('x')[1]}:format=nv12:afbc=1"
-        ffmpeg_command = f"ffmpeg -hwaccel rkmpp -hwaccel_output_format drm_prime -afbc rga -rtsp_transport tcp -i {input_url} -c:a copy -strict -2 {scale_command} -c:v h264_rkmpp -rc_mode CBR -b:v {bitrate} -maxrate {bitrate} -bufsize {bufsize} -profile:v high -g:v 50 -f rtsp -rtsp_transport tcp {output_url}"
+        ffmpeg_command = f"ffmpeg -hwaccel rkmpp -hwaccel_output_format drm_prime -afbc rga -rtsp_transport tcp -i {input_url} -c:a copy -strict -2 {scale_command} -c:v h264_rkmpp -rc_mode CBR -b:v {bitrate} -maxrate {bitrate} -bufsize {bufsize} -profile:v high -g:v 50 -f h264 -"
     else:
-        ffmpeg_command = f"ffmpeg -hwaccel rkmpp -rtsp_transport tcp -i {input_url} -c:v libx264 -preset ultrafast -tune zerolatency -b:v {bitrate} -s {resolution} -r 30 -f rtsp -rtsp_transport tcp {output_url}"
+        ffmpeg_command = f"ffmpeg -hwaccel rkmpp -rtsp_transport tcp -i {input_url} -c:v libx264 -preset ultrafast -tune zerolatency -b:v {bitrate} -s {resolution} -r 30 -f h264 -"
     try:
-        # 运行ffmpeg命令
         print(ffmpeg_command)
-        process = subprocess.Popen(ffmpeg_command, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        global process
+        process = subprocess.Popen(ffmpeg_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         r.set(f"ffmpeg_stream1_pid", process.pid)
         r.set(f"ffmpeg_stream1_bitrate", bitrate)
         r.set(f"ffmpeg_stream1_resolution", resolution)
     except Exception as e:
         print('error:', e)
         pass
-    
+
 def stop_ffmpeg():
     pid = r.get(f"ffmpeg_stream1_pid")
     if pid:
@@ -85,6 +90,33 @@ def stop_ffmpeg():
             pass
     else:
         return
+
+def tcp_send_thread():
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.bind((TCP_HOST, TCP_PORT))
+    server.listen(1)
+    print(f"TCP server listening on {TCP_HOST}:{TCP_PORT}")
+    try:
+        conn, addr = server.accept()
+        print(f"Client connected: {addr}")
+        while True:
+            if 'process' in globals() and process and process.stdout:
+                data = process.stdout.read(1024)
+                if not data:
+                    break
+                conn.sendall(data)
+            else:
+                time.sleep(0.1)
+    except Exception as e:
+        print("error", e)
+    finally:
+        if 'process' in globals() and process:
+            process.terminate()
+        server.close()
+
+# 启动TCP线程
+tcp_thread = threading.Thread(target=tcp_send_thread, daemon=True)
+tcp_thread.start()
 
 try:
     while True:
@@ -134,7 +166,7 @@ try:
                     }
                     rate_str = rate_map.get(rate_data, '未知')
                     resolution = rate_resolution_map.get(rate_str, '1920x1080')
-                    print(f"收到有效帧: 设备地址={dev_addr:02X}, 命令类型={cmd_type:02X}, 帧长度={frame_len}, 速率={rate_str}, 分辨率={resolution}, CRC={crc_recv.hex().upper()}")
+                    # print(f"收到有效帧: 设备地址={dev_addr:02X}, 命令类型={cmd_type:02X}, 帧长度={frame_len}, 速率={rate_str}, 分辨率={resolution}, CRC={crc_recv.hex().upper()}")
                     start_ffmpeg_process(rate_str, resolution)
                     buffer = buffer[10:]
                     ser.write(b'\x82')
