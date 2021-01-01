@@ -12,7 +12,7 @@ import crcmod
 os.system("hwclock -s")
 os.system("systemctl stop serial-getty@ttyS2.service")
 
-crc16_ccitt = crcmod.mkCrcFun(0x11021, initCrc=0, rev=True, xorOut=0x0000)
+crc16_modbus = crcmod.mkCrcFun(0x18005, initCrc=0xFFFF, rev=True, xorOut=0x0000)
 
 # 配置参数
 SERIAL_PORT = '/dev/ttyS4'
@@ -91,9 +91,9 @@ try:
         # 读取数据
         try:
             data = ser.read(ser.in_waiting or 1)
-            print(data)
             if data:
                 buffer += data
+                print(buffer)
                 # 按协议解析数据帧
                 while len(buffer) >= 10:  # 最小帧长10字节
                     if buffer[:4] != HEADER:
@@ -109,13 +109,13 @@ try:
                     rate_data = buffer[7]
                     crc_recv = buffer[8:10]
                     # 检查协议字段
-                    if dev_addr != 0x10 or cmd_type != 0xC0 or frame_len != 0x0A:
+                    if dev_addr != 0x10 or cmd_type != 0x02 or frame_len != 0x0A:
                         buffer = buffer[1:]
                         continue
-                    # 计算CRC16-CCITT
-                    crc_calc = crc16_ccitt(buffer[:8])
+                    # 计算CRC16-modebus
+                    crc_calc = crc16_modbus(buffer[:8])
+                    crc_calc_bytes = crc_calc.to_bytes(2, 'little')
                     print('crc:', hex(crc_calc))
-                    crc_calc_bytes = crc_calc.to_bytes(2, 'big')
                     if crc_recv != crc_calc_bytes:
                         buffer = buffer[1:]
                         continue
@@ -134,7 +134,7 @@ try:
                     }
                     rate_str = rate_map.get(rate_data, '未知')
                     resolution = rate_resolution_map.get(rate_str, '1920x1080')
-                    # print(f"收到有效帧: 设备地址={dev_addr:02X}, 命令类型={cmd_type:02X}, 帧长度={frame_len}, 速率={rate_str}, 分辨率={resolution}, CRC={crc_recv.hex().upper()}")
+                    print(f"收到有效帧: 设备地址={dev_addr:02X}, 命令类型={cmd_type:02X}, 帧长度={frame_len}, 速率={rate_str}, 分辨率={resolution}, CRC={crc_recv.hex().upper()}")
                     start_ffmpeg_process(rate_str, resolution)
                     buffer = buffer[10:]
                     ser.write(b'\x82')
