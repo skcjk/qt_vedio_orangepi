@@ -2,174 +2,280 @@
 
 import subprocess
 import serial
-import redis
 import time
-import psutil
 import os
 import socket
 import crcmod
 import threading
-
-UDP_HOST = '192.168.1.1'
-UDP_PORT = 10002
-
-# 同步系统时间
-os.system("hwclock -s")
-
-crc16_modbus = crcmod.mkCrcFun(0x18005, initCrc=0xFFFF, rev=True, xorOut=0x0000)
+import psutil 
 
 # 配置参数
 SERIAL_PORT = '/dev/ttyS4'
 BAUD_RATE = 38400
-
-# 初始化串口
-ser = serial.Serial(SERIAL_PORT, BAUD_RATE)
-
-# 帧头定义
+UDP_HOST1 = '192.168.1.1'
+UDP_CMD_PORT1 = 10001
+UDP_VEDIO_PORT1 = 10002
+UDP_HOST2 = '192.168.1.1'
+UDP_CMD_PORT2 = 10011
+UDP_VEDIO_PORT2 = 10012
 HEADER = b'\x48\x59\x43\x4C'  # 0x4859434C
 
-# 缓冲区初始化
-buffer = b''
+# 同步系统时间
+os.system("hwclock -s")
 
-# 连接Redis并进行密码认证
-while True:
-    try:
-        r = redis.Redis(host='localhost', port=6379, db=0, password='orangepi')
-        r.ping()
-        break
-    except redis.ConnectionError as e:
-        time.sleep(5)
+class ffmpegThread:
+    def __init__(self):
+        self.ffmpeg_process1 = None
+        self.ffmpeg_process2 = None
+        self.device2Ok = False
+        self.resolution1 = "0"
+        self.bitrate1 = "0"
+        self.resolution2 = "0"
+        self.bitrate2 = "0"
+        self.now_resolution1 = "0"
+        self.now_bitrate1 = "0"
+        self.now_resolution2 = "0"
+        self.now_bitrate2 = "0"
 
-def start_ffmpeg_process(bitrate, resolution="1920x1080"):
-    pid = r.get("ffmpeg_stream1_pid")
-    if pid and psutil.pid_exists(int(pid)):
-        # 判断分辨率和码率是否一致
-        old_bitrate = r.get("ffmpeg_stream1_bitrate")
-        old_resolution = r.get("ffmpeg_stream1_resolution")
-        if (old_bitrate is not None and old_bitrate.decode() != bitrate) or (old_resolution is not None and old_resolution.decode() != resolution):
-            stop_ffmpeg()
-        else:
-            print("ffmpeg is running with same parameters, no need to restart")
-            return
-    else:
-        print("ffmpeg is not running, starting a new process")
-    # 构建ffmpeg命令
-    # input_url = f"rtsp://admin:abcd1234@192.168.1.123:554"
-    input_url = f"rtsp://localhost:8554/mystream"
-    output_url = f"rtsp://localhost:8554/stream1"
-    bufsize = str(int(bitrate[:-1]) * 2) + bitrate[-1]  # 将bufsize设置为bitrate的两倍
-    if resolution in ["1920x1080", "1280x720", "320x180"]:
-        scale_command = f"-vf scale_rkrga=w={resolution.split('x')[0]}:h={resolution.split('x')[1]}:format=nv12:afbc=1"
-        ffmpeg_command = f"ffmpeg -hwaccel rkmpp -hwaccel_output_format drm_prime -afbc rga -rtsp_transport tcp -i {input_url} -c:a copy -strict -2 {scale_command} -c:v h264_rkmpp -rc_mode CBR -b:v {bitrate} -maxrate {bitrate} -bufsize {bufsize} -profile:v high -g:v 50 -f h264 -"
-    else:
-        ffmpeg_command = f"ffmpeg -hwaccel rkmpp -rtsp_transport tcp -i {input_url} -c:v libx264 -x264-params keyint=50:scenecut=0:repeat-headers=1 -preset ultrafast -tune zerolatency -b:v {bitrate} -s {resolution} -r 30 -f h264 -"
-    try:
-        print(ffmpeg_command)
-        global process
-        process = subprocess.Popen(ffmpeg_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-        r.set(f"ffmpeg_stream1_pid", process.pid)
-        r.set(f"ffmpeg_stream1_bitrate", bitrate)
-        r.set(f"ffmpeg_stream1_resolution", resolution)
-    except Exception as e:
-        print('error:', e)
-        pass
 
-def stop_ffmpeg():
-    pid = r.get(f"ffmpeg_stream1_pid")
-    if pid:
-        try:
-            # 使用psutil终止进程
-            process = psutil.Process(int(pid))
-            for proc in process.children(recursive=True):
-                proc.kill()
-            process.kill()
-            r.delete(f"ffmpeg_stream1_pid")
-            r.delete(f"ffmpeg_stream1_bitrate")
-            r.delete(f"ffmpeg_stream1_resolution")
-        except Exception as e:
-            pass
-    else:
-        return
+        self.crc16_modbus = crcmod.mkCrcFun(0x18005, initCrc=0xFFFF, rev=True, xorOut=0x0000)
+        self.ser = serial.Serial(SERIAL_PORT, BAUD_RATE)
+        self.serBuffer = b''
+        self.input_url = f"rtsp://localhost:8554/mystream"
+        # self.input_url = f"rtsp://admin:abcd1234@192.168.1.123:554"
 
-def udp_send_thread():
-    client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    print(f"UDP client sending to {UDP_HOST}:{UDP_PORT}")
-    try:
+    
+    def parse_protocol(self, data):
+        if len(data) < 9:
+            return None
+        if data[0:4] != HEADER:
+            return None
+        addr_byte = data[4]
+        cmd_type = data[5]
+        length = data[6]
+        if len(data) != length:
+            return None
+        payload = data[7:-2]
+        crc_recv = int.from_bytes(data[-2:], byteorder='little')
+        crc_calc = self.crc16_modbus(data[:-2])
+        if crc_calc != crc_recv:
+            return None
+        return {
+            'addr': addr_byte,
+            'cmd': cmd_type,
+            'length': length,
+            'payload': payload,
+            'crc': crc_recv
+        }
+    
+    def receiveUDPCommandFrom1(self, buffer_size=4096):
         while True:
-            if 'process' in globals() and process and process.stdout:
-                data = process.stdout.read(4096)
-                if not data:
-                    break
-                client.sendto(data, (UDP_HOST, UDP_PORT))
-            else:
-                time.sleep(0.1)
-    except Exception as e:
-        print("error", e)
-    finally:
-        if 'process' in globals() and process:
-            process.terminate()
-        client.close()
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                sock.bind(('0.0.0.0', UDP_CMD_PORT1))
+                while True:
+                    data, addr = sock.recvfrom(buffer_size)
+                    result = self.parse_protocol(data)
+                    if result is not None:
+                        if result['addr'] == 0x10 and result['cmd'] == 0x05:
+                            os.system("poweroff")
+            except Exception as e:
+                time.sleep(1)
+            finally:
+                try:
+                    sock.close()
+                except:
+                    pass
 
-# 启动UDP线程
-udp_thread = threading.Thread(target=udp_send_thread, daemon=True)
-udp_thread.start()
-start_ffmpeg_process('8M', '1920x1080')
+    def receiveUDPCommandFrom2(self, buffer_size=4096):
+        while True:
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                sock.bind(('0.0.0.0', UDP_CMD_PORT2))
+                while True:
+                    data, addr = sock.recvfrom(buffer_size)
+                    result = self.parse_protocol(data)
+                    if result is not None:
+                        if result['addr'] == 0x10 and result['cmd'] == 0x01:
+                            if len(result['payload']) == 1:
+                                if result['payload'][0] == 0x00:
+                                    self.device2Ok = True
+                                    print("OK")
+                        if result['addr'] == 0x10 and result['cmd'] == 0x02 and self.device2Ok == True:
+                            if len(result['payload']) == 1:
+                                rate_data = result['payload'][0]
+                                rate_map = {0x05: '80k', 0x06: '40k', 0x07: '20k', 0x08:'10k'}
+                                resolution_map = {
+                                    0x05: '320x240',
+                                    0x06: '320x240',
+                                    0x07: '256x128',
+                                    0x08: '256x128'
+                                }
+                                self.bitrate2 = rate_map.get(rate_data, '0')
+                                self.resolution2 = resolution_map.get(rate_data, '0')
+                                print(self.bitrate2, self.resolution2)
+                        if result['addr'] == 0x10 and result['cmd'] == 0x05:
+                            os.system("poweroff")
+            except Exception as e:
+                time.sleep(1)
+            finally:
+                try:
+                    sock.close()
+                except:
+                    pass
 
-try:
-    while True:
-        # 读取数据
+    def receiveSerialCommand(self):
         try:
-            data = ser.read(ser.in_waiting or 1)
-            if data:
-                buffer += data
-                print(buffer)
-                # 按协议解析数据帧
-                while len(buffer) >= 10:  # 最小帧长10字节
-                    if buffer[:4] != HEADER:
-                        # 帧头不匹配，丢弃第一个字节
-                        buffer = buffer[1:]
-                        continue
-                    # 帧头匹配，检查剩余长度
-                    if len(buffer) < 10:
-                        break
-                    dev_addr = buffer[4]
-                    cmd_type = buffer[5]
-                    frame_len = buffer[6]
-                    rate_data = buffer[7]
-                    crc_recv = buffer[8:10]
-                    # 检查协议字段
-                    if dev_addr != 0x10 or cmd_type != 0x02 or frame_len != 0x0A:
-                        buffer = buffer[1:]
-                        continue
-                    # 计算CRC16-modebus
-                    crc_calc = crc16_modbus(buffer[:8])
-                    crc_calc_bytes = crc_calc.to_bytes(2, 'little')
-                    print('crc:', hex(crc_calc))
-                    if crc_recv != crc_calc_bytes:
-                        buffer = buffer[1:]
-                        continue
-                    # 速率数据解析
-                    rate_map = {0x01: '8M', 0x02: '4M', 0x03: '2M', 0x04: '1M', 
-                                0x05: '80k', 0x06: '40k', 0x07: '20k', 0x08:'10k'}
-                    rate_resolution_map = {
-                        '8M': '1920x1080',
-                        '4M': '1920x1080',
-                        '2M': '1280x720',
-                        '1M': '1280x720',
-                        '80k': '320x240',
-                        '40k': '320x240',
-                        '20k': '256x128',
-                        '10k': '256x128'
-                    }
-                    rate_str = rate_map.get(rate_data, '未知')
-                    resolution = rate_resolution_map.get(rate_str, '1920x1080')
-                    # print(f"收到有效帧: 设备地址={dev_addr:02X}, 命令类型={cmd_type:02X}, 帧长度={frame_len}, 速率={rate_str}, 分辨率={resolution}, CRC={crc_recv.hex().upper()}")
-                    start_ffmpeg_process(rate_str, resolution)
-                    buffer = buffer[10:]
-                    ser.write(b'\x82')
+            while True:
+                # 读取数据
+                try:
+                    data = self.ser.read(self.ser.in_waiting or 1)
+                    print(data)
+                    if data:
+                        self.serBuffer += data
+                        # 按协议解析数据帧
+                        while len(self.serBuffer) >= 10:  # 最小帧长10字节
+                            if self.serBuffer[:4] != HEADER:
+                                # 帧头不匹配，丢弃第一个字节
+                                self.serBuffer = self.serBuffer[1:]
+                                continue
+                            # 帧头匹配，检查剩余长度
+                            if len(self.serBuffer) < 10:
+                                break
+                            result = self.parse_protocol(self.serBuffer)
+                            if result is not None:
+                                if result['addr'] == 0x10 and result['cmd'] == 0x02:
+                                    if len(result['payload']) == 1:
+                                        rate_data = result['payload'][0]
+                                        rate_map = {0x01: '8M', 0x02: '4M', 0x03: '2M', 0x04: '1M'}
+                                        resolution_map = {
+                                            0x01: '1920x1080',
+                                            0x02: '1920x1080',
+                                            0x03: '1280x720',
+                                            0x04: '1280x720'
+                                        }
+                                        self.bitrate1 = rate_map.get(rate_data, '0')
+                                        self.resolution1 = resolution_map.get(rate_data, '0')
+                                        self.ser.write(b'\x82')
+                                self.serBuffer = self.serBuffer[10:]
+                except Exception as e:
+                    print("error", e)
         except Exception as e:
             print("error", e)
-except Exception as e:
-    print("error", e)
-finally:
-    ser.close()
+
+
+    def kill_process(self, proc):
+        # 使用psutil杀死进程及其子进程
+        if proc is not None:
+            try:
+                p = psutil.Process(proc.pid)
+                for child in p.children(recursive=True):
+                    child.kill()
+                p.kill()
+            except Exception as e:
+                print("kill_process error:", e)
+
+    def manageFFmpegProcess1(self):
+        while True:
+            if (self.bitrate1 != self.now_bitrate1 or self.resolution1 != self.now_resolution1):
+                # 如果进程正在运行，先kill
+                if self.ffmpeg_process1 and self.ffmpeg_process1.poll() is None:
+                    self.kill_process(self.ffmpeg_process1)
+                    self.ffmpeg_process1 = None
+                bufsize = str(int(self.bitrate1[:-1]) * 2) + self.bitrate1[-1]
+                if self.resolution1 in ["1920x1080", "1280x720", "320x180"]:
+                    scale_command = f"-vf scale_rkrga=w={self.resolution1.split('x')[0]}:h={self.resolution1.split('x')[1]}:format=nv12:afbc=1"
+                    ffmpeg_command = f"ffmpeg -hwaccel rkmpp -hwaccel_output_format drm_prime -afbc rga -rtsp_transport tcp -i {self.input_url} -c:a copy -strict -2 {scale_command} -c:v h264_rkmpp -rc_mode CBR -b:v {self.bitrate1} -maxrate {self.bitrate1} -bufsize {bufsize} -profile:v high -g:v 50 -f h264 -"
+                else:
+                    ffmpeg_command = f"ffmpeg -hwaccel rkmpp -rtsp_transport tcp -i {self.input_url} -c:v libx264 -x264-params keyint=50:scenecut=0:repeat-headers=1 -preset ultrafast -tune zerolatency -b:v {self.bitrate1} -s {self.resolution1} -r 30 -f h264 -"
+                print(ffmpeg_command)
+                self.ffmpeg_process1 = subprocess.Popen(ffmpeg_command, 
+                                                        shell=True, 
+                                                        stdout=subprocess.PIPE, 
+                                                        stderr=subprocess.DEVNULL)
+                self.now_bitrate1 = self.bitrate1
+                self.now_resolution1 = self.resolution1
+            time.sleep(1)
+
+    def manageFFmpegProcess2(self):
+        while True:
+            if (self.bitrate2 != self.now_bitrate2 or self.resolution2 != self.now_resolution2):
+                # 如果进程正在运行，先kill
+                if self.ffmpeg_process2 and self.ffmpeg_process2.poll() is None:
+                    self.kill_process(self.ffmpeg_process2)
+                    self.ffmpeg_process2 = None
+                bufsize = str(int(self.bitrate2[:-1]) * 2) + self.bitrate2[-1]
+                if self.resolution2 in ["1920x1080", "1280x720", "320x180"]:
+                    scale_command = f"-vf scale_rkrga=w={self.resolution2.split('x')[0]}:h={self.resolution2.split('x')[1]}:format=nv12:afbc=1"
+                    ffmpeg_command = f"ffmpeg -hwaccel rkmpp -hwaccel_output_format drm_prime -afbc rga -rtsp_transport tcp -i {self.input_url} -c:a copy -strict -2 {scale_command} -c:v h264_rkmpp -rc_mode CBR -b:v {self.bitrate2} -maxrate {self.bitrate2} -bufsize {bufsize} -profile:v high -g:v 50 -f h264 -"
+                else:
+                    ffmpeg_command = f"ffmpeg -hwaccel rkmpp -rtsp_transport tcp -i {self.input_url} -c:v libx264 -x264-params keyint=50:scenecut=0:repeat-headers=1 -preset ultrafast -tune zerolatency -b:v {self.bitrate2} -s {self.resolution2} -r 30 -f h264 -"
+                print(ffmpeg_command)
+                self.ffmpeg_process2 = subprocess.Popen(ffmpeg_command, 
+                                                        shell=True, 
+                                                        stdout=subprocess.PIPE, 
+                                                        stderr=subprocess.DEVNULL)
+                self.now_bitrate2 = self.bitrate2
+                self.now_resolution2 = self.resolution2
+            time.sleep(1)
+
+    def pushH264ToUDP1(self):
+        client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        print(f"UDP client sending to {UDP_HOST1}:{UDP_VEDIO_PORT1}")
+        while True:
+            try:
+                while True:
+                    if self.ffmpeg_process1 and self.ffmpeg_process1.stdout:
+                        data = self.ffmpeg_process1.stdout.read(4096)
+                        if not data:
+                            break
+                        client.sendto(data, (UDP_HOST1, UDP_VEDIO_PORT1))
+                    else:
+                        time.sleep(0.1)
+            except Exception as e:
+                print("error", e)
+            finally:
+                client.close()
+                if self.ffmpeg_process1:
+                    self.kill_process(self.ffmpeg_process1)
+                    self.ffmpeg_process1 = None
+                    self.now_bitrate1 = "0"
+                    self.now_resolution1 = "0"
+
+    def pushH264ToUDP2(self):
+        client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        print(f"UDP client sending to {UDP_HOST2}:{UDP_VEDIO_PORT2}")
+        while True:
+            try:
+                while True:
+                    if self.ffmpeg_process2 and self.ffmpeg_process2.stdout:
+                        data = self.ffmpeg_process2.stdout.read(4)
+                        if not data:
+                            break
+                        client.sendto(data, (UDP_HOST2, UDP_VEDIO_PORT2))
+                    else:
+                        time.sleep(0.1)
+            except Exception as e:
+                print("error", e)
+            finally:
+                client.close()
+                if self.ffmpeg_process2:
+                    self.kill_process(self.ffmpeg_process2)
+                    self.ffmpeg_process2 = None
+                    self.now_bitrate2 = "0"
+                    self.now_resolution2 = "0"
+
+    def start(self):
+        threading.Thread(target=self.receiveUDPCommandFrom1, daemon=True).start()
+        threading.Thread(target=self.receiveUDPCommandFrom2, daemon=True).start()
+        threading.Thread(target=self.receiveSerialCommand, daemon=True).start()
+        threading.Thread(target=self.manageFFmpegProcess1, daemon=True).start()
+        threading.Thread(target=self.manageFFmpegProcess2, daemon=True).start()
+        threading.Thread(target=self.pushH264ToUDP1, daemon=True).start()
+        threading.Thread(target=self.pushH264ToUDP2, daemon=True).start()
+        while True:
+            time.sleep(10)
+
+if __name__ == "__main__":
+    ffmpeg_thread = ffmpegThread()
+    ffmpeg_thread.start()
