@@ -1,0 +1,11 @@
+[Unit]
+Description=mediamtx
+
+[Service]
+ExecStart=/home/orangepi/mediamtx/mediamtx
+WorkingDirectory=/home/orangepi/mediamtx
+User=root
+Environment="PATH=$PATH:/home/orangepi/.local/bin:/mnt/usr/local/ffmpeg/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+[Install]
+WantedBy=multi-user.target

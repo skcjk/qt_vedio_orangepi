@@ -1,0 +1,14 @@
+[Unit]
+Description=My Python Script
+After=network.target
+
+[Service]
+WorkingDirectory=/home/orangepi/www
+ExecStart=/usr/local/bin/gunicorn -w 4 -b 0.0.0.0:5000 app:app
+User=root
+Environment="PKG_CONFIG_PATH=/usr/local/x264/lib/pkgconfig:/usr/local/libdrm/lib/pkgconfig:$PKG_CONFIG_PATH"
+Environment="LD_LIBRARY_PATH=/usr/local/x264/lib:/mnt/usr/local/ffmpeg/lib:$LD_LIBRARY_PATH"
+Environment="PATH=$PATH:/home/orangepi/.local/bin:/mnt/usr/local/ffmpeg/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+[Install]
+WantedBy=multi-user.target
