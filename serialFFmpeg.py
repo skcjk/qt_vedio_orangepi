@@ -8,6 +8,10 @@ import time
 import json
 import threading
 import psutil
+import datetime
+import random
+import string
+import signal
 
 # 配置参数
 SERIAL_PORT = '/dev/ttyS0'
@@ -95,6 +99,44 @@ def start_ffmpeg_process(resolution, bitrate):
     finally:
         process.terminate()
 
+def start_recording(duration):
+    pid = r.get("recording_pid")
+    if pid and psutil.pid_exists(int(pid)):
+        return
+
+    rtsp_url = "rtsp://admin:abcd1234@192.168.137.123:554"
+    now = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    random_str = ''.join(random.choices(string.ascii_letters + string.digits, k=8))
+    output_file = f"/home/orangepi/data_test/output_{now}_{random_str}_piece%d.mp4"
+
+    ffmpeg_command = [
+        "ffmpeg",
+        "-y",  # 强制覆盖输出文件
+        "-i", rtsp_url,
+        "-c:v", "copy",
+        "-f", "segment",
+        "-segment_time", str(int(duration)),  # 将录制时间的单位改为分钟
+        "-reset_timestamps", "1",
+        output_file
+    ]
+
+    try:
+        process = subprocess.Popen(ffmpeg_command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        r.set("recording_pid", process.pid)
+    except Exception as e:
+        print("error", e)
+
+def stop_recording():
+    pid = r.get("recording_pid")
+    if pid:
+        try:
+            process = psutil.Process(int(pid))
+            process.send_signal(signal.SIGINT)
+            process.wait()  # 等待进程终止
+            r.delete("recording_pid")
+        except Exception as e:
+            print("error", e)
+
 # 从串口读取数据并启动或停止FFmpeg进程
 ffmpeg_thread = None
 
@@ -129,7 +171,13 @@ try:
                     r.delete(f"ffmpeg_stream2_pid")
                 except Exception as e:
                     print("error", e)
-            
+        
+        elif command == 'start_recording':
+            duration = data.get('duration')
+            start_recording(duration)
+        
+        elif command == 'stop_recording':
+            stop_recording()
 
 except Exception as e:
     print("error", e)
