@@ -84,6 +84,11 @@ def sync_time():
         # 设置系统时间
         command = f'date -s "{datetime}"'
         subprocess.run(command, shell=True, check=True)
+        
+        # 设置RTC时间
+        rtc_command = f'hwclock --set --date="{datetime}"'
+        subprocess.run(rtc_command, shell=True, check=True)
+        
         return jsonify({'status': 'success'})
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)})

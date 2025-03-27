@@ -12,6 +12,10 @@ import datetime
 import random
 import string
 import signal
+import os
+
+# 同步系统时间
+os.system("hwclock -s")
 
 # 配置参数
 SERIAL_PORT = '/dev/ttyS0'
@@ -175,9 +179,25 @@ try:
         elif command == 'start_recording':
             duration = data.get('duration')
             start_recording(duration)
+
+        elif command == 'sync_time':
+            datetime = data.get('datetime')
+            try:
+                # 设置系统时间
+                os.system(f'date -s "{datetime}"')
+                
+                # 设置RTC时间
+                os.system(f'hwclock --set --date="{datetime}"')
+            except Exception as e:
+                print("error", e)
         
         elif command == 'stop_recording':
             stop_recording()
+
+        elif command == 'shutdown':
+            os.system("poweroff")
+        else:
+            print("Unknown command:", command)
 
 except Exception as e:
     print("error", e)
