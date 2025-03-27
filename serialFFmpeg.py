@@ -147,12 +147,15 @@ ffmpeg_thread = None
 try:
     while True:
         line = ser.read_until(b"\r\n").decode("utf-8").strip()
-        print(line)
         if not line:
             continue
         
-        data = json.loads(line)
-        command = data.get('command')
+        try:
+            data = json.loads(line)
+            command = data.get('command')
+        except Exception:
+            continue
+
         
         if command == 'start':
             resolution = data.get('resolution')
