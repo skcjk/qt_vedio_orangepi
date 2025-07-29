@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 import subprocess
 import psutil
@@ -9,6 +9,7 @@ import string
 import redis
 import time
 import signal
+import glob
 
 app = Flask(__name__)
 CORS(app)  # 允许所有来源的跨域请求
@@ -29,7 +30,8 @@ def start_ffmpeg(stream):
     bitrate = data.get('bitrate')
     
     # 构建ffmpeg命令
-    input_url = f"rtsp://admin:abcd1234@192.168.137.123:554"
+    # input_url = f"rtsp://admin:abcd1234@192.168.137.123:554"
+    input_url = f"rtsp://192.168.137.1:8554/mystream"
     output_url = f"rtsp://localhost:8554/{stream}"
     bufsize = str(int(bitrate[:-1]) * 2) + bitrate[-1]  # 将bufsize设置为bitrate的两倍
     
@@ -101,7 +103,8 @@ def start_recording():
     
     data = request.get_json()
     duration = data.get('duration')
-    rtsp_url = "rtsp://admin:abcd1234@192.168.137.123:554"
+    # rtsp_url = "rtsp://admin:abcd1234@192.168.137.123:554"
+    rtsp_url = "rtsp://192.168.137.1:8554/mystream"
     
     now = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     random_str = ''.join(random.choices(string.ascii_letters + string.digits, k=8))
@@ -159,6 +162,87 @@ def reboot():
     try:
         subprocess.run(["reboot"], check=True)
         return jsonify({'status': 'reboot initiated'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)})
+
+@app.route('/replay', methods=['POST'])
+def replay():
+    try:
+        data = request.get_json()
+        filename = data.get('filename')
+        resolution = data.get('resolution')
+        bitrate = data.get('bitrate')
+        
+        if not filename or not resolution or not bitrate:
+            return jsonify({'status': 'error', 'message': 'Missing required parameters: filename, resolution, bitrate'})
+        
+        # 构建完整文件路径
+        file_path = f"/home/orangepi/data_test/{filename}"
+        
+        # 检查文件是否存在
+        if not os.path.exists(file_path):
+            return jsonify({'status': 'error', 'message': 'File not found'})
+        
+        # 停止已存在的replay进程
+        replay_pid = r.get("replay_pid")
+        if replay_pid and psutil.pid_exists(int(replay_pid)):
+            try:
+                process = psutil.Process(int(replay_pid))
+                for proc in process.children(recursive=True):
+                    proc.kill()
+                process.kill()
+                r.delete("replay_pid")
+            except Exception as e:
+                print("Error stopping existing replay:", e)
+        
+        # 构建ffmpeg推流命令
+        output_url = "rtsp://localhost:8554/replay"
+        bufsize = str(int(bitrate[:-1]) * 2) + bitrate[-1]  # 将bufsize设置为bitrate的两倍
+        
+        if resolution in ["1920x1080", "1280x720", "320x180"]:
+            scale_command = f"-vf scale_rkrga=w={resolution.split('x')[0]}:h={resolution.split('x')[1]}:format=nv12:afbc=1"
+            ffmpeg_command = f"ffmpeg -re -hwaccel rkmpp -hwaccel_output_format drm_prime -afbc rga -i {file_path} -c:a copy -strict -2 {scale_command} -c:v h264_rkmpp -rc_mode CBR -b:v {bitrate} -maxrate {bitrate} -bufsize {bufsize} -profile:v high -g:v 50 -f rtsp -rtsp_transport tcp {output_url}"
+        else:
+            ffmpeg_command = f"ffmpeg -re -hwaccel rkmpp -i {file_path} -c:v libx264 -preset ultrafast -tune zerolatency -b:v {bitrate} -s {resolution} -r 30 -f rtsp -rtsp_transport tcp {output_url}"
+        
+        # 启动ffmpeg推流进程
+        process = subprocess.Popen(ffmpeg_command, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        r.set("replay_pid", process.pid)
+        
+        return jsonify({'status': 'success', 'message': 'Replay started'})
+        
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)})
+
+@app.route('/data', methods=['GET'])
+def get_data_files():
+    try:
+        # 获取data_test目录下所有文件
+        files = glob.glob('/home/orangepi/data_test/*')
+        # 按修改时间排序（最新的在前）
+        files.sort(key=os.path.getmtime, reverse=True)
+        
+        # 判断文件数量是否大于等于2
+        if len(files) < 2:
+            return jsonify({'status': 'success', 'files': []})
+        
+        # 去掉最新的一个文件
+        if files:
+            files = files[1:]
+        
+        # 构建文件信息列表
+        file_list = []
+        for file_path in files:
+            if os.path.isfile(file_path):
+                file_info = {
+                    'name': os.path.basename(file_path),
+                    'size': os.path.getsize(file_path),
+                    'modified_time': datetime.datetime.fromtimestamp(os.path.getmtime(file_path)).strftime('%Y-%m-%d %H:%M:%S')
+                }
+                file_list.append(file_info)
+        
+        return jsonify({'status': 'success', 'files': file_list})
+        
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)})
 
