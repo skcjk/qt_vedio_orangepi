@@ -39,8 +39,8 @@ def start_ffmpeg_process(resolution, bitrate):
     if pid and psutil.pid_exists(int(pid)):
         return
 
-    # RTSP_URL = "rtsp://admin:abcd1234@192.168.137.123:554"
-    RTSP_URL = "rtsp://192.168.137.1:8554/mystream"
+    RTSP_URL = "rtsp://admin:abcd1234@192.168.137.123:554"
+    # RTSP_URL = "rtsp://192.168.137.1:8554/mystream"
     bufsize = str(int(bitrate[:-1]) * 2) + bitrate[-1]  # 将bufsize设置为bitrate的两倍
     
     if resolution in ["1920x1080", "1280x720", "320x180"]:
@@ -109,8 +109,8 @@ def start_recording(duration):
     if pid and psutil.pid_exists(int(pid)):
         return
 
-    # rtsp_url = "rtsp://admin:abcd1234@192.168.137.123:554"
-    rtsp_url = "rtsp://192.168.137.1:8554/mystream"
+    rtsp_url = "rtsp://admin:abcd1234@192.168.137.123:554"
+    # rtsp_url = "rtsp://192.168.137.1:8554/mystream"
     now = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     random_str = ''.join(random.choices(string.ascii_letters + string.digits, k=8))
     output_file = f"/home/orangepi/data_test/output_{now}_{random_str}_piece%d.mp4"

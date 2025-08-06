@@ -30,8 +30,8 @@ def start_ffmpeg(stream):
     bitrate = data.get('bitrate')
     
     # 构建ffmpeg命令
-    # input_url = f"rtsp://admin:abcd1234@192.168.137.123:554"
-    input_url = f"rtsp://192.168.137.1:8554/mystream"
+    input_url = f"rtsp://admin:abcd1234@192.168.137.123:554"
+    # input_url = f"rtsp://192.168.137.1:8554/mystream"
     output_url = f"rtsp://localhost:8554/{stream}"
     bufsize = str(int(bitrate[:-1]) * 2) + bitrate[-1]  # 将bufsize设置为bitrate的两倍
     
@@ -103,8 +103,8 @@ def start_recording():
     
     data = request.get_json()
     duration = data.get('duration')
-    # rtsp_url = "rtsp://admin:abcd1234@192.168.137.123:554"
-    rtsp_url = "rtsp://192.168.137.1:8554/mystream"
+    rtsp_url = "rtsp://admin:abcd1234@192.168.137.123:554"
+    # rtsp_url = "rtsp://192.168.137.1:8554/mystream"
     
     now = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     random_str = ''.join(random.choices(string.ascii_letters + string.digits, k=8))
