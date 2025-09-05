@@ -30,7 +30,7 @@ def start_ffmpeg(stream):
     bitrate = data.get('bitrate')
     
     # 构建ffmpeg命令
-    input_url = f"rtsp://admin:abcd1234@192.168.137.123:554"
+    input_url = f"rtsp://admin:abcd1234@192.168.1.123:554"
     # input_url = f"rtsp://192.168.137.1:8554/mystream"
     output_url = f"rtsp://localhost:8554/{stream}"
     bufsize = str(int(bitrate[:-1]) * 2) + bitrate[-1]  # 将bufsize设置为bitrate的两倍
@@ -45,6 +45,8 @@ def start_ffmpeg(stream):
         # 运行ffmpeg命令
         process = subprocess.Popen(ffmpeg_command, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         r.set(f"ffmpeg_{stream}_pid", process.pid)
+        r.set(f"ffmpeg_{stream}_bitrate", bitrate)
+        r.set(f"ffmpeg_{stream}_resolution", resolution)
         return jsonify({'status': 'success'})
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)})
@@ -60,6 +62,8 @@ def stop_ffmpeg(stream):
                 proc.kill()
             process.kill()
             r.delete(f"ffmpeg_{stream}_pid")
+            r.delete(f"ffmpeg_{stream}_bitrate")
+            r.delete(f"ffmpeg_{stream}_resolution")
             return jsonify({'status': 'stopped'})
         except Exception as e:
             return jsonify({'status': 'error', 'message': str(e)})
@@ -103,7 +107,7 @@ def start_recording():
     
     data = request.get_json()
     duration = data.get('duration')
-    rtsp_url = "rtsp://admin:abcd1234@192.168.137.123:554"
+    rtsp_url = "rtsp://admin:abcd1234@192.168.1.123:554"
     # rtsp_url = "rtsp://192.168.137.1:8554/mystream"
     
     now = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
